@@ -345,14 +345,20 @@ static ngx_int_t ngx_http_js_challenge_handler(ngx_http_request_t *r) {
     int ret = get_cookie(r, &cookie_name, &response);
 
     if (ret < 0) {
-         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "[ js challenge log ] sending challenger... ");
+         if( r->uri.data[1] && r->uri.data[1] != 'f'){
+            //pass if request: "GET /favicon.ico HTTP/1.1"
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "js_challenge: sending challenge ");
+        }
          return serve_challenge(r, challenge, conf->html, conf->title);
     }
 
     get_challenge_string(bucket, addr, conf->secret, challenge);
 
     if (verify_response(response, challenge) != 0) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "[ js challenge log ] wrong/expired cookie (res=%s), sending challenger...", response.data);
+        if( r->uri.data[1] && r->uri.data[1] != 'f'){
+            //pass if request: "GET /favicon.ico HTTP/1.1"
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "js_challenge: wrong/expired cookie , resending challenge "); 
+        }
         return serve_challenge(r, challenge, conf->html, conf->title);
     }
 
