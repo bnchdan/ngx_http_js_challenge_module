@@ -1,8 +1,8 @@
-#include <ngx_http.h>
-
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+
+#include "ngx_http.c"
 
 #define DEFAULT_SECRET "changeme"
 #define SHA1_MD_LEN 20
@@ -50,7 +50,7 @@ static ngx_command_t ngx_http_js_challenge_commands[] = {
 
         {
                 ngx_string("js_challenge"),
-                NGX_HTTP_LOC_CONF | NGX_HTTP_SRV_CONF | NGX_CONF_FLAG,
+                NGX_HTTP_LIF_CONF | NGX_HTTP_LOC_CONF | NGX_CONF_FLAG,
                 ngx_conf_set_flag_slot,
                 NGX_HTTP_LOC_CONF_OFFSET,
                 offsetof(ngx_http_js_challenge_loc_conf_t, enabled),
@@ -169,11 +169,13 @@ static char *ngx_http_js_challenge_merge_loc_conf(ngx_conf_t *cf, void *parent, 
         if (fd < 0) {
             ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "js_challenge_html: Could not open file '%s': %s", path,
                                strerror(errno));
+            close(fd);
             return NGX_CONF_ERROR;
         }
 
         conf->html = ngx_palloc(cf->pool, info.st_size);
         int ret = read(fd, conf->html, info.st_size);
+        close(fd);
         if (ret < 0) {
             ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "js_challenge_html: Could not read file '%s': %s", path,
                                strerror(errno));
@@ -231,7 +233,7 @@ int serve_challenge(ngx_http_request_t *r, const char *challenge, const char *ht
     b->memory = 1;
     b->last_buf = 1;
 
-    r->headers_out.status = NGX_HTTP_OK;
+    r->headers_out.status = NGX_HTTP_SERVICE_UNAVAILABLE;
     r->headers_out.content_length_n = size;
     r->headers_out.content_type = content_type;
     ngx_http_send_header(r);
@@ -298,20 +300,15 @@ int verify_response(ngx_str_t response, char *challenge) {
 }
 
 int get_cookie(ngx_http_request_t *r, ngx_str_t *name, ngx_str_t *value) {
-#if defined(nginx_version) && nginx_version >= 1023000
-    ngx_table_elt_t *h;
-    for (h = r->headers_in.cookie; h; h = h->next) {
-        u_char *start = h->value.data;
-        u_char *end = h->value.data + h->value.len;
-#else
     ngx_table_elt_t **h;
+
     h = r->headers_in.cookies.elts;
 
     ngx_uint_t i = 0;
     for (i = 0; i < r->headers_in.cookies.nelts; i++) {
         u_char *start = h[i]->value.data;
         u_char *end = h[i]->value.data + h[i]->value.len;
-#endif
+
         while (start < end) {
             while (start < end && *start == ' ') { start++; }
 
@@ -350,12 +347,20 @@ static ngx_int_t ngx_http_js_challenge_handler(ngx_http_request_t *r) {
     int ret = get_cookie(r, &cookie_name, &response);
 
     if (ret < 0) {
-        return serve_challenge(r, challenge, conf->html, conf->title);
+         if ( strncmp((char *)r->uri.data,"/favicon.ico",12) != 0){
+            //pass if request: "GET /favicon.ico HTTP/1.1"
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "js_challenge: sending challenge ");
+         }
+         return serve_challenge(r, challenge, conf->html, conf->title);
     }
 
     get_challenge_string(bucket, addr, conf->secret, challenge);
 
     if (verify_response(response, challenge) != 0) {
+        if ( strncmp((char *)r->uri.data,"/favicon.ico",12) != 0){
+            //pass if request: "GET /favicon.ico HTTP/1.1"
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "js_challenge: bad cookie/resending ");
+        }
         return serve_challenge(r, challenge, conf->html, conf->title);
     }
 
